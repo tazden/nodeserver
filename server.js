@@ -1,54 +1,63 @@
-// Запускаем socket.io на порту 3000
 const io = require('socket.io')(3000, {
-  cors: {
-    origin: "*",
-  }
+  cors: { origin: "*" }
 });
+
+const broadcasters = {};
 
 io.on('connection', (socket) => {
   console.log(`Новое подключение: ${socket.id}`);
 
-  // 1. Broadcaster просит сгенерировать код
   socket.on('generateCode', () => {
-    // Генерация 4-значного кода
     const code = Math.floor(1000 + Math.random() * 9000).toString();
-    // Отправляем код обратно только тому, кто запросил
+    broadcasters[code] = socket.id;
     socket.emit('codeGenerated', code);
     console.log(`Сгенерированный код для ${socket.id}: ${code}`);
   });
 
-  // 2. Viewer (или клиент) посылает код, чтобы «подключиться» к Broadcaster
   socket.on('connectToDevice', (data) => {
-    // data = { code: "1234" }
-    console.log(`Запрос на подключение с кодом ${data.code} от ${socket.id}`);
-    // Широковещательно уведомим всех, что кто-то «подключился» с таким кодом
-    io.emit('deviceConnected', data);
+    let enteredCode = "";
+    if (Array.isArray(data)) {
+      if (data.length > 0 && data[0].code) {
+        enteredCode = data[0].code.toString().trim();
+      }
+    } else if (data && data.code) {
+      enteredCode = data.code.toString().trim();
+    }
+    console.log(`Viewer ${socket.id} пытается подключиться с кодом: "${enteredCode}"`);
+    if (enteredCode !== "" && broadcasters.hasOwnProperty(enteredCode)) {
+      const broadId = broadcasters[enteredCode];
+      console.log(`Viewer ${socket.id} подключился к Broadcaster ${broadId}`);
+      io.to(broadId).emit('deviceConnected', { code: enteredCode, viewerId: socket.id });
+    } else {
+      console.log(`Неверный код: "${enteredCode}"`);
+      socket.emit('invalidCode', { message: 'Неверный код подключения' });
+    }
   });
 
-  // 3. Broadcaster отправляет кадры экрана (base64)
-  socket.on('screenVideoData', (base64Frame) => {
-    // Отправляем всем, кроме самого отправителя
-    socket.broadcast.emit('screenVideoData', {
-      broadcasterId: socket.id,
-      frame: base64Frame
-    });
+  socket.on('screenVideoData', (data) => {
+    socket.broadcast.emit('screenVideoData', data);
   });
 
-  // --- WebRTC (если нужно) ---
-  socket.on('offer', (payload) => {
-    console.log(`Получен offer от ${socket.id}`);
-    socket.broadcast.emit('offer', payload);
+  socket.on('touchStart', (data) => {
+    socket.broadcast.emit('touchStart', data);
+  });
+  socket.on('touchMove', (data) => {
+    socket.broadcast.emit('touchMove', data);
+  });
+  socket.on('touchEnd', (data) => {
+    socket.broadcast.emit('touchEnd', data);
   });
 
-  socket.on('answer', (payload) => {
-    console.log(`Получен answer от ${socket.id}`);
-    socket.broadcast.emit('answer', payload);
+  socket.on('systemAction', (action) => {
+    socket.broadcast.emit('systemAction', action);
   });
 
-  socket.on('iceCandidate', (payload) => {
-    console.log(`Получен iceCandidate от ${socket.id}`);
-    socket.broadcast.emit('iceCandidate', payload);
+  socket.on('disconnect', () => {
+    console.log(`Socket disconnected: ${socket.id}`);
+    for (const code in broadcasters) {
+      if (broadcasters[code] === socket.id) {
+        delete broadcasters[code];
+      }
+    }
   });
 });
-
-console.log('Сигнальный сервер запущен на порту 3000');
